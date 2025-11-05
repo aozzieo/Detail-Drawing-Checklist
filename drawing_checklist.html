@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Printable Drawing Checklist</title>
+<style>
+  @page { size: Letter; margin: 0.75in; }
+  :root { --ink:#111; --muted:#666; --line:#ddd; --accent:#0b6cff; --bg:#fff; }
+  html, body { height:100%; }
+  body { font: 14px/1.4 Segoe UI, Arial, sans-serif; color: var(--ink); background:var(--bg); margin:0; }
+  body.dark { --ink:#eaf2f9; --muted:#9fb0bf; --line: rgba(255,255,255,0.06); --accent:#47b4ff; --bg: #383c42; }
+
+  .sheet { max-width: 8.5in; margin: 0 auto; padding: 0.75in; box-sizing: content-box; }
+  .topbar { display:flex; align-items:center; justify-content:space-between; margin-bottom: 16px; }
+  .heading { font-size: 22px; font-weight:700; outline:none; border-bottom: 2px solid var(--ink); padding: 4px 0; min-height: 32px; }
+  .heading[contenteditable="true"]:empty:before { content: "Click to set heading"; color: var(--muted); font-weight: 400; }
+
+  .controls { display:flex; gap:8px; }
+  button { appearance:none; border:1px solid var(--ink); background:transparent; color:var(--ink); padding:6px 10px; border-radius:6px; cursor:pointer; font-weight:600; }
+  button:hover { background:color-mix(in oklab, var(--ink), transparent 92%); }
+
+  .list { border-top:1px solid var(--line); }
+  .row { display:flex; align-items:center; gap:10px; padding:10px 0; border-bottom:1px solid var(--line); transition: background .1s ease, transform .08s ease, box-shadow .12s ease; }
+  .row input[type="checkbox"] { width:18px; height:18px; }
+  .row .text { flex:1; min-height:22px; outline:none; color:var(--ink); }
+  .row .text[contenteditable="true"]:empty:before { content: "Click to add text"; color: var(--muted); }
+
+  .row.focused { transform: scale(1.01); box-shadow: 0 12px 30px rgba(11,108,255,0.08); border-left: 3px solid rgba(11,108,255,0.12); background: rgba(11,108,255,0.02); border-radius: 14px; }
+  .row.dragging { opacity: 0.4; }
+  .del { border-color:#bbb; color:#b00; padding:4px 8px; border-radius:6px; font-weight:700; }
+  .del:hover { background:#ffecec; }
+  [contenteditable="true"]:focus { box-shadow: none; outline: none; caret-color: var(--accent); }
+  .modal { position:fixed; inset:0; display:none; place-items:center; background: rgba(0,0,0,0.35); z-index:60; }
+  .modal.show { display:grid; }
+  .modal .card { background: var(--bg); color: var(--ink); border: 1px solid var(--line); padding: 18px; border-radius: 12px; width: min(560px, 92vw); box-shadow: 0 12px 40px rgba(0,0,0,0.35); }
+  .modal h3 { margin:0 0 8px 0; }
+  .shortcuts { display:grid; gap:8px; }
+  .kbd { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: color-mix(in oklab, var(--ink), transparent 92%); padding:4px 8px; border-radius:6px; }
+  @media print {
+    .controls, .del, .modal { display:none !important; }
+    .sheet { padding: 0; }
+    .heading { border-color:#000; }
+    body.dark { --bg: #fff; --ink: #000; }
+  }
+</style>
+</head>
+<body>
+  <div class="sheet">
+    <div class="topbar">
+      <div id="title" class="heading" contenteditable="true">Drawing QA Checklist</div>
+      <div class="controls">
+        <button id="btnShortcuts" title="Keyboard shortcuts">Shortcuts</button>
+        <button id="btnDark" title="Toggle dark mode">Dark</button>
+        <button id="add">+ Add Item</button>
+        <button id="reset">Reset Checkboxes</button>
+      </div>
+    </div>
+    <div id="list" class="list" role="list"></div>
+  </div>
+  <div id="modalShortcuts" class="modal" aria-hidden="true">
+    <div class="card" role="dialog" aria-label="Keyboard shortcuts">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+        <h3>Keyboard Shortcuts</h3>
+        <button id="closeShortcuts" class="del" style="border:none; padding:6px 8px;">Close</button>
+      </div>
+      <div class="shortcuts">
+        <div><span class="kbd">Enter</span> — While typing: create new row below and focus it</div>
+        <div><span class="kbd">Ctrl/Cmd + K</span> — Toggle check on focused row</div>
+        <div><span class="kbd">Arrow up / down</span> — Move focus between rows</div>
+        <div><span class="kbd">Delete</span> or <span class="kbd">Backspace</span> — Delete focused row</div>
+        <div><span class="kbd">Ctrl/Cmd + Z</span> — Undo last delete</div>
+        <div><span class="kbd">Drag</span> — Reorder rows</div>
+        <div><span class="kbd">Esc</span> — Close this dialog</div>
+      </div>
+    </div>
+  </div>
+<script>
+(() => {
+  const KEY = 'print_checklist_v1';
+  const DM_KEY = 'print_checklist_dark_v1';
+  const elTitle = document.getElementById('title');
+  const elList = document.getElementById('list');
+  const btnAdd = document.getElementById('add');
+  const btnReset = document.getElementById('reset');
+  const btnShortcuts = document.getElementById('btnShortcuts');
+  const modalShortcuts = document.getElementById('modalShortcuts');
+  const closeShortcuts = document.getElementById('closeShortcuts');
+  const btnDark = document.getElementById('btnDark');
+
+  let dragSrcEl = null;
+
+  function load(){ try { return JSON.parse(localStorage.getItem(KEY)) || { title:'Drawing QA Checklist', items:[] }; } catch { return { title:'Drawing QA Checklist', items:[] }; } }
+  function save(){ localStorage.setItem(KEY, JSON.stringify(state)); }
+
+  let state = load();
+  const undoStack = [];
+
+  function pushUndo(op){ undoStack.push(op); if(undoStack.length>50) undoStack.shift(); }
+  function undo(){ const op = undoStack.pop(); if(!op)return; if(op.action==='delete'){ state.items.splice(op.index,0,op.item); save(); render(); focusText(op.index);} }
+
+  function render(){ elList.innerHTML=''; elTitle.textContent=state.title; state.items.forEach((it,i)=>elList.appendChild(row(it,i))); }
+
+  function row(it,i){
+    const div=document.createElement('div');
+    div.className='row';
+    div.draggable=true;
+    div.dataset.index=i;
+
+    const cb=document.createElement('input'); cb.type='checkbox'; cb.checked=!!it.done; cb.onchange=()=>{it.done=cb.checked; save();};
+
+    const text=document.createElement('div'); text.className='text'; text.contentEditable='true'; text.textContent=it.text||'';
+    text.onfocus=()=>div.classList.add('focused'); text.onblur=()=>div.classList.remove('focused');
+    text.oninput=()=>{it.text=text.textContent.trim(); save();};
+    text.onkeydown=(e)=>{const rows=[...elList.children]; const idx=rows.indexOf(div); if(e.key==='Enter'){e.preventDefault();addItemAt(idx+1);return;} if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'){e.preventDefault();cb.checked=!cb.checked;it.done=cb.checked;save();return;} if(e.key==='ArrowDown'){e.preventDefault();if(idx<rows.length-1)focusText(idx+1);} if(e.key==='ArrowUp'){e.preventDefault();if(idx>0)focusText(idx-1);} if(e.key==='Delete'){e.preventDefault();deleteRow(idx);} if(e.key==='Backspace'){if(!text.textContent.trim()){e.preventDefault();deleteRow(idx);}}};
+
+    const del=document.createElement('button'); del.className='del'; del.textContent='×'; del.onclick=()=>deleteRow(i);
+
+    div.append(cb,text,del);
+
+    div.addEventListener('dragstart',e=>{dragSrcEl=div; div.classList.add('dragging'); e.dataTransfer.effectAllowed='move';});
+    div.addEventListener('dragover',e=>{e.preventDefault(); const dragging=dragSrcEl; if(!dragging||dragging===div)return; const rect=div.getBoundingClientRect(); const next=(e.clientY-rect.top)/(rect.bottom-rect.top)>0.5; elList.insertBefore(dragging,next?div.nextSibling:div);});
+    div.addEventListener('dragend',()=>{div.classList.remove('dragging'); state.items=[...elList.children].map(r=>state.items[r.dataset.index]); save(); render();});
+
+    return div;
+  }
+
+  function addItemAt(i){ state.items.splice(i,0,{text:'',done:false}); save(); render(); focusText(i); }
+  function deleteRow(i){ if(i<0||i>=state.items.length)return; const item=state.items[i]; pushUndo({action:'delete',index:i,item}); state.items.splice(i,1); save(); render(); }
+  function focusText(i){ const row=elList.children[i]; if(!row)return; const text=row.querySelector('.text'); text.focus(); const range=document.createRange(); range.selectNodeContents(text); range.collapse(false); const sel=window.getSelection(); sel.removeAllRanges(); sel.addRange(range); }
+
+  btnAdd.onclick=()=>addItemAt(state.items.length);
+  btnReset.onclick=()=>{state.items.forEach(i=>i.done=false);save();render();};
+  elTitle.oninput=()=>{state.title=elTitle.textContent.trim()||'Drawing QA Checklist';save();};
+  btnShortcuts.onclick=()=>modalShortcuts.classList.add('show');
+  closeShortcuts.onclick=()=>modalShortcuts.classList.remove('show');
+  modalShortcuts.onclick=e=>{if(e.target===modalShortcuts)modalShortcuts.classList.remove('show');};
+
+  function setDark(on){document.body.classList.toggle('dark',on);localStorage.setItem(DM_KEY,JSON.stringify(on));btnDark.textContent=on?'Light':'Dark';}
+  btnDark.onclick=()=>setDark(!document.body.classList.contains('dark'));
+  try{setDark(JSON.parse(localStorage.getItem(DM_KEY)));}catch{}
+
+  document.onkeydown=e=>{const inEdit=document.activeElement.isContentEditable;if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='z'){e.preventDefault();undo();} if(e.key==='Enter'&&!inEdit){e.preventDefault();addItemAt(state.items.length);} if(e.key==='Escape'){modalShortcuts.classList.remove('show');}};
+
+  if(!state.items.length){for(let i=0;i<8;i++)state.items.push({text:'',done:false});save();}
+
+  render();
+})();
+</script>
+</body>
+</html>
